@@ -175,8 +175,8 @@ def train_valid_test_datasets_provider(train_val_test_num_samples):
 
 
 if __name__ == "__main__":
-    torch.cuda.memory._record_memory_history()
-
+    torch.cuda.memory._record_memory_history(enabled='all', context='all', stacks='all', max_entries=9223372036854775807, device=None)
+    torch.cuda.memory._set_allocator_settings("expandable_segments:True")
     pretrain(train_valid_test_datasets_provider,
              model_provider,
              ModelType.encoder_or_decoder,

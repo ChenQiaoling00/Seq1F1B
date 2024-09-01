@@ -447,6 +447,8 @@ class MixedPrecisionOptimizer(MegatronOptimizer):
         # Step the optimizer.
         timers('optimizer-inner-step', log_level=1).start(
             barrier=args.barrier_with_L1_time)
+
+        # torch.cuda.empty_cache()
         self.optimizer.step()
         timers('optimizer-inner-step').stop()
 

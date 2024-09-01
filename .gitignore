@@ -15,3 +15,5 @@ logs
 *tfevents*
 */index-cache/*
 *.pt
+*.pickle
+

@@ -7,7 +7,7 @@ export CUDA_DEVICE_MAX_CONNECTIONS=1
 export NCCL_IB_TIMEOUT=19
 export NCCL_IB_QPS_PER_CONNECTION=4
 
-
+splits=$1
 # __doc_head_address_start__
 # Getting the node names
 nodes=$(scontrol show hostnames "$SLURM_JOB_NODELIST")
@@ -40,13 +40,14 @@ TENSOR_MODEL_PARALLEL_SIZE=4
 NUM_LAYERS=16
 HIDDEN_SIZE=8192
 NUM_ATTENTION_HEADS=64
-GLOBAL_BATCH_SIZE=1
+GLOBAL_BATCH_SIZE=8
 SEQ_LEN=65536
 TRAIN_SAMPLES=73242188  # 300B tokens / 4096
 LR_WARMUP_SAMPLES=50000
 LR_DECAY_SAMPLES=73192188 # TRAIN_SAMPLES - LR_WARMUP_SAMPLES
     #    --tensor-model-parallel-size ${TENSOR_MODEL_PARALLEL_SIZE} \
         #    --sequence-parallel \
+            #    --untie-embeddings-and-output-weights \
 CHECKPOINT_DIR="./checkpoints"
 DATACACHE_DIR="./data-cache"
 TENSORBOARD_DIR="./tensorboard"
@@ -57,6 +58,7 @@ options=" \
         --vocab-file $VOCAB_FILE \
         --merge-file $MERGE_FILE \
        --pipeline-model-parallel-size 8 \
+       --untie-embeddings-and-output-weights \
        --use-flash-attn \
        --use-distributed-optimizer \
        --untie-embeddings-and-output-weights \
@@ -72,8 +74,6 @@ options=" \
        --train-samples ${TRAIN_SAMPLES} \
        --lr-warmup-samples ${LR_WARMUP_SAMPLES} \
        --lr-decay-samples ${LR_DECAY_SAMPLES} \
-       --save ${CHECKPOINT_DIR} \
-       --load ${CHECKPOINT_DIR} \
        --split 99,1,0 \
        --tokenizer-type GPT2BPETokenizer \
        --distributed-backend nccl \
@@ -97,6 +97,7 @@ options=" \
        --eval-iters 32 \
        --bf16 \
        --pipe-sp-splits 64 \
+       --pipe-sp-strategy uniform_comp \
        --tensorboard-dir ${TENSORBOARD_DIR}"
     #    --pipe-sp-splits 64 \
 torchrun --nproc_per_node 8 --nnodes $NNODES --node_rank $SLURM_PROCID --master_addr $MASTER_ADDR --master_port $MASTER_PORT \

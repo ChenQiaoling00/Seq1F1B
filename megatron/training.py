@@ -763,7 +763,8 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
     timers('interval-time', log_level=0).start(barrier=True)
     print_datetime('before the start of training step')
     report_memory_flag = True
-    if torch.distributed.get_rank() == 0:
+    rank_id=torch.distributed.get_rank()
+    if rank_id==0 or rank_id == 28 :
         
         llm_profile = torch.profiler.profile
 
@@ -773,8 +774,8 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
     else:
         llm_profile = DummyProfile
 
-    llm_profile = torch.profiler.profile
-    rank_id=torch.distributed.get_rank()
+    
+    torch.cuda.memory._record_memory_history(max_entries=100000)
 
     with llm_profile(
         activities=[
@@ -786,7 +787,7 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
             skip_first=1, wait=1, warmup=1, active=1, repeat=1
         ),
         on_trace_ready=torch.profiler.tensorboard_trace_handler(
-            f"tmp/rank_{rank_id}"
+            f"trace64K_rsp64_uniform/rank_{rank_id}"
         ),
         with_stack=True,
         with_modules=True,
@@ -809,16 +810,15 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                         opt_param_scheduler,
                         config)
             iteration += 1
-            if iteration == 5:
-                break
-            print(f':::::::211111::::::::',flush=True)
+            # print(f'iteration:::::::::{iteration}',flush=True)
+            if iteration == 6:
+                rank_id=torch.distributed.get_rank()
+                # print(f'dump::::::::::::::::::::::::',flush=True)
+                # torch.cuda.memory._dump_snapshot(f"memory1/EC128EX{rank_id}.pickle")
             
-            print(f':::::::2222::::::::',flush=True)
-            torch.cuda.memory._dump_snapshot(f"memory_{rank_id}.pickle")
-            torch.cuda.memory._record_memory_history(enabled=None)
-
+            if iteration == 50:
+                assert False
             
-        
             prof.step()
             args.consumed_train_samples += mpu.get_data_parallel_world_size() * \
                                         args.micro_batch_size * \

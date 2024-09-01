@@ -21,6 +21,7 @@ class solver:
             res.insert(0, int(sol))
             prefix -= int(sol)
         res.insert(0, prefix)
+        print(f'partition results:{res}')
         return res
         
 

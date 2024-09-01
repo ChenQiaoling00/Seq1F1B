@@ -16,6 +16,13 @@ from megatron.core.utils import get_attr_wrapped_model, get_model_config, get_mo
 # Types
 Shape = Union[List[int], torch.Size]
 
+def print_memory_usage(description=""):
+    allocated = torch.cuda.memory_allocated()
+    reserved = torch.cuda.memory_reserved()
+    if torch.distributed.get_rank() ==0:
+        print(f"rank: {torch.distributed.get_rank()}, {description} - allocated: {allocated / 1024**3:.2f} GB, reserved: {reserved / 1024**3:.2f} GB",flush=True)
+
+
 
 def get_forward_backward_func():
     """Retrieves the appropriate forward_backward function given the
@@ -313,7 +320,6 @@ def forward_backward_no_pipelining(
         data_iterator = data_iterator[0]
 
     config = get_model_config(model)
-
     no_sync_func = config.no_sync_func
     if no_sync_func is None and isinstance(model, torchDDP):
         no_sync_func = model.no_sync
@@ -421,6 +427,8 @@ def forward_backward_pipelining_with_interleaving(
     args = get_args()
     input_tensors = [sp_queue(args.pipe_sp_splits, print=False, chunk=i, add_msg="input") for i in range(len(model))]
     output_tensors = [sp_queue(args.pipe_sp_splits, print=False, chunk=i, add_msg="output") for i in range(len(model))]
+
+   
     forward_data_store = []
     if not forward_only:
         output_tensor_grads = [sp_queue(args.pipe_sp_splits) for _ in range(len(model))]
@@ -1185,7 +1193,8 @@ def forward_backward_pipelining_without_interleaving(
     # Checkpoint the activations of partial Transformer layers in a number of micro-batches
     # within the maximum outstanding micro-batch backpropagations.
     # Micro-batches with the ids less than 'num_microbatches_with_partial_activation_checkpoints'
-    # checkpoint partial Transformer layers (or skip checkpointing) and
+    # checkpoint partial Transformer layers (or skip checkpointing) 
+    # and
     # the rest of micro-batches within a window of micro-batches checkpoint
     # all Transformer layers. The window of micro-batches is set by the maximum
     # outstanding backpropagations and becomes smaller at later pipeline stages.
@@ -1240,6 +1249,7 @@ def forward_backward_pipelining_without_interleaving(
     # Input, output tensors only need to be saved when doing backward passes
     input_tensors = None
     output_tensors = None
+    
     if not forward_only:
         input_tensors = sp_queue(global_args.pipe_sp_splits,)
         output_tensors = sp_queue(global_args.pipe_sp_splits)
@@ -1249,6 +1259,7 @@ def forward_backward_pipelining_without_interleaving(
     input_tensor = None
     mega_args = get_args()
     mega_args.schedule_info = {}
+   
     for i in range(num_warmup_microbatches):
         # Decide to checkpoint all layers' activations of the current micro-batch
         if max_outstanding_backprops is not None:
@@ -1259,6 +1270,7 @@ def forward_backward_pipelining_without_interleaving(
         else:
             checkpoint_activations_microbatch = None
         mega_args.schedule_info['micro_seq_id'] = i
+        print_memory_usage(f"before recv forward send:{i}")
         input_tensor, output_tensor = recv_forward_send(
             forward_step_func,
             data_iterator,
@@ -1270,17 +1282,22 @@ def forward_backward_pipelining_without_interleaving(
             collect_non_loss_data,
             checkpoint_activations_microbatch,
         )
+        print_memory_usage(f"after recv forward send:{i}")
+    
 
         if not forward_only:
             input_tensors.append(input_tensor[0])
             output_tensors.append(output_tensor[0])
             deallocate_output_tensor(output_tensor[0], config.deallocate_pipeline_outputs)
 
+    # torch.cuda.empty_cache()
+    # import pdb;pdb.set_trace()
     # Before running 1F1B, need to receive first forward tensor.
     # If all microbatches are run in warmup / cooldown phase, then no need to
     # receive this tensor here.
 
     # Run 1F1B in steady state.
+    # print_memory_usage("after warmup")
     for i in range(num_microbatches_remaining):
         mega_args.schedule_info['micro_seq_id'] = num_warmup_microbatches + i
         last_iteration = i == (num_microbatches_remaining - 1)
@@ -1293,8 +1310,6 @@ def forward_backward_pipelining_without_interleaving(
             ) >= config.num_microbatches_with_partial_activation_checkpoints
         else:
             checkpoint_activations_microbatch = None
-
-      
 
         if forward_only:
             output_tensor = forward_send_recv(last_iteration,
@@ -1323,6 +1338,7 @@ def forward_backward_pipelining_without_interleaving(
                 collect_non_loss_data,
                 checkpoint_activations_microbatch,)
     # Run cooldown backward passes.
+    # print_memory_usage("before backward")
     if not forward_only:
         for i in range(num_warmup_microbatches):
 
@@ -1336,7 +1352,7 @@ def forward_backward_pipelining_without_interleaving(
                     enable_grad_sync()
 
             recv_backward_send()
-
+    # print_memory_usage("after backward")
     # Launch any remaining grad reductions
     if no_sync_context is not None:
         enable_grad_sync()

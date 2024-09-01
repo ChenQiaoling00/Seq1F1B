@@ -51,6 +51,7 @@ class FlashAttnVarlenFunc(torch.autograd.Function):
         if softmax_scale is None:
             softmax_scale = q.shape[-1] ** (-0.5)
         batch_size = q.shape[0]
+        
         if 'k_cache'  in kv_cache:
             k_cache, v_cache = kv_cache['k_cache'], kv_cache['v_cache']
             offset = k_cache.shape[1]
@@ -84,8 +85,6 @@ class FlashAttnVarlenFunc(torch.autograd.Function):
             dropout_p,
             softmax_scale,
             causal=causal,
-            window_size=(-1, -1),
-            alibi_slopes=None,
             return_softmax=False,
         )
         ctx._kv_cache = kv_cache
@@ -110,11 +109,13 @@ class FlashAttnVarlenFunc(torch.autograd.Function):
         pk, pv = [rearrange(x, 'b s ... -> (b s) ...') for x in [pk, pv]]
         pk = pk.contiguous()
         pv = pv.contiguous()
+        
         q = q.contiguous()
         # from megatron.core.pipeline_parallel.schedules import print_log
         # print_rank(k_whole.shape, 7)
         # print_rank(f"seqlen: {ctx._seqlen_k}", 7)
         last_idx = not 'k_grad' in ctx._kv_cache
+      
         dq, dk, dv = torch.empty_like(q), torch.empty_like(pk), torch.empty_like(pv)
         _flash_attn_varlen_backward(
             dout,
@@ -132,11 +133,7 @@ class FlashAttnVarlenFunc(torch.autograd.Function):
             ctx._seqlen_k,
             ctx.dropout_p,
             ctx.softmax_scale,
-            ctx.causal,
-            (-1,-1),
-            None,
-            False,
-            rng_state=rng_state,
+            ctx.causal
         )
         dq = dq[..., : dout.shape[-1]]  # We could have padded the head dimension
         dk = dk[..., : dout.shape[-1]]
