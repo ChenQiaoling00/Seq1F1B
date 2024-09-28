@@ -7,7 +7,7 @@ from megatron.core.parallel_state import (
     get_tensor_model_parallel_rank,
     get_tensor_model_parallel_world_size,
 )
-
+import torch.distributed as dist
 from .utils import VocabUtility
 
 
@@ -88,7 +88,8 @@ class _VocabParallelCrossEntropy(torch.autograd.Function):
             loss = (1.0 - smoothing) * loss - smoothing * mean_log_probs
 
         ctx.label_smoothing, ctx.vocab_size = label_smoothing, vocab_size
-        ctx.save_for_backward(exp_logits, target_mask, masked_target_1d)
+        print(f'VVVVVVVVVVVVVVVVVVVVVVVVVVVV rankid :{dist.get_rank()},exp_logits:{exp_logits.shape}',flush=True)
+        # ctx.save_for_backward(exp_logits, target_mask, masked_target_1d)
 
         # Store softmax, target-mask and masked-target for backward pass.
         ctx.save_for_backward(exp_logits, target_mask, masked_target_1d)
@@ -99,6 +100,7 @@ class _VocabParallelCrossEntropy(torch.autograd.Function):
     def backward(ctx, grad_output):
 
         # Retreive tensors from the forward path.
+        # import pdb;pdb.set_trace()
         softmax, target_mask, masked_target_1d = ctx.saved_tensors
         label_smoothing, vocab_size = ctx.label_smoothing, ctx.vocab_size
 

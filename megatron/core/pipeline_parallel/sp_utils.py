@@ -93,6 +93,9 @@ class sp_queue:
                 return self.queues[0].pop(-1)
         else:
             return self.queues[0].pop(-1)
+        
+    # def __setitem__(self, key, value):
+    #     self.queues[key] = [value]
 
     def __getitem__(self, idx):
         self.print_log(f"get tail inp ")
