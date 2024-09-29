@@ -1344,7 +1344,8 @@ def forward_backward_pipelining_without_interleaving(
         with offload.record(i):
             output_tensor=forward_step(forward_step_func,data_iterator, model,num_microbatches*global_args.pipe_sp_splits,input_tensor,forward_data_store,config,collect_non_loss_data,checkpoint_activations_microbatch,)
         
-        if num_warmup_microbatches >=2:
+        # if num_warmup_microbatches >=2:
+        if num_warmup_microbatches >=2 and i != num_warmup_microbatches-1:
             if i > 0:
                 offload_ctx.__exit__(None,None,None)
             offload_ctx=offload.offload_async(i)
@@ -1357,10 +1358,10 @@ def forward_backward_pipelining_without_interleaving(
             output_tensors.append(output_tensor[0])
             deallocate_output_tensor(output_tensor[0], config.deallocate_pipeline_outputs)
 
-    if num_warmup_microbatches >=2:
-        # onload_ctx=offload.onload_async(0)
-        onload_ctx=offload.onload_async(1)
-        onload_ctx.__enter__()
+    # if num_warmup_microbatches >=2:
+    #     # onload_ctx=offload.onload_async(0)
+    #     onload_ctx=offload.onload_async(num_warmup_microbatches-1)
+    #     onload_ctx.__enter__()
     
     # Before running 1F1B, need to receive first forward tensor.
     # If all microbatches are run in warmup / cooldown phase, then no need to
@@ -1419,14 +1420,14 @@ def forward_backward_pipelining_without_interleaving(
                 output_tensor_grad = recv_backward_wrapper()
                 send_forward_wrapper(output_tensor)
                 
-            if num_warmup_microbatches >= 2:
-                print(f'NONONONONONONONONONONONONONONONONONONONO',flush=True)
-                onload_ctx.__exit__(None, None, None)
-                offload_ctx.__exit__(None, None, None)
-                offload_ctx = offload.offload_async(forward_id)
-                onload_ctx = offload.onload_async(i+1)
-                offload_ctx.__enter__()
-                onload_ctx.__enter__()
+            # if num_warmup_microbatches >= 2:
+            #     print(f'NONONONONONONONONONONONONONONONONONONONO',flush=True)
+            #     onload_ctx.__exit__(None, None, None)
+            #     # offload_ctx.__exit__(None, None, None)
+            #     offload_ctx = offload.offload_async(forward_id)
+            #     onload_ctx = offload.onload_async(i+1)
+            #     offload_ctx.__enter__()
+            #     onload_ctx.__enter__()
                     
             input_tensors.append(input_tensor)
             output_tensors.append(output_tensor)
@@ -1463,6 +1464,9 @@ def forward_backward_pipelining_without_interleaving(
             #     config,
             #     collect_non_loss_data,
             #     checkpoint_activations_microbatch,)
+            
+            
+            
     # Run cooldown backward passes.
     if not forward_only:
         for i in range(num_warmup_microbatches):
@@ -1480,24 +1484,30 @@ def forward_backward_pipelining_without_interleaving(
             output_tensor = output_tensors.pop(0)
     
             output_tensor_grad = recv_backward_wrapper()
-            # i = [0,1]
+            # i = [0,1,2]
+            # [2,1,0]
             # num_microbatches_remaining = 0
             
-            backward_id = i + num_microbatches_remaining
-            if num_warmup_microbatches >=2:
-                onload_ctx.__exit__(None,None,None)
-                # if i ==0:
-                #     offload_ctx.__exit__(None,None,None)
-                if i+1 < num_warmup_microbatches:
-                    # onload_ctx = offload.onload_async(backward_id+1)
-                    onload_ctx = offload.onload_async(0)
-                    onload_ctx.__enter__()
-                    
+            onload_id=num_warmup_microbatches -i-2
+            
+            print(f'OOOOOONNNNNNNLLLLLLLLLOOOOADrank:{parallel_state.get_pipeline_model_parallel_rank()},onload_id:onload_id:onload_id:{onload_id}',flush=True)
             
             input_tensor_grad = backward_step(
                 input_tensor, output_tensor, output_tensor_grad, model_type, config
             )
             send_backward_wrapper(input_tensor_grad)
+            
+            backward_id = i + num_microbatches_remaining
+            if num_warmup_microbatches >=2:
+                if i+1 < num_warmup_microbatches:
+                    # onload_ctx = offload.onload_async(backward_id+1)
+                    onload_ctx = offload.onload_async(onload_id)
+                    onload_ctx.__enter__()
+                onload_ctx.__exit__(None,None,None)
+                    
+            
+
+            
 
     
 
