@@ -19,6 +19,9 @@ from megatron.model.fused_bias_gelu import bias_gelu_impl
 from megatron.core.models.common.rotary_pos_embedding import apply_rotary_pos_emb
 from megatron.model.utils import attention_mask_func, openai_gelu, erf_gelu
 
+import torch.distributed as dist
+
+
 try:
     from einops import rearrange
 except ImportError:
@@ -61,6 +64,10 @@ class FlashAttnVarlenFunc(torch.autograd.Function):
             k_whole = k
             v_whole = v
         kv_cache['k_cache'], kv_cache['v_cache'] = k_whole, v_whole 
+        
+        # if dist.get_rank()==0:
+        #     kcachetensor=kv_cache['k_cache']
+            # print(f'KV:::::::::::::::::kv_cache:{kcachetensor.shape},device:{kcachetensor.device}',flush=True)
         seqlen_k = k_whole.shape[1]
         seqlen_q = q.shape[1]
         ctx._seqlen_k = seqlen_k
@@ -84,8 +91,6 @@ class FlashAttnVarlenFunc(torch.autograd.Function):
             dropout_p,
             softmax_scale,
             causal=causal,
-            window_size=(-1, -1),
-            alibi_slopes=None,
             return_softmax=False,
         )
         ctx._kv_cache = kv_cache
@@ -100,6 +105,7 @@ class FlashAttnVarlenFunc(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, dout, *args):
+        # import pdb;pdb.set_trace()
         q, k, v, out, softmax_lse, cu_seqlens_q, cu_seqlens_k, rng_state = ctx.saved_tensors
         k_whole = ctx._kv_cache['k_cache']
         v_whole = ctx._kv_cache['v_cache']
@@ -114,8 +120,9 @@ class FlashAttnVarlenFunc(torch.autograd.Function):
         # from megatron.core.pipeline_parallel.schedules import print_log
         # print_rank(k_whole.shape, 7)
         # print_rank(f"seqlen: {ctx._seqlen_k}", 7)
-        last_idx = not 'k_grad' in ctx._kv_cache
+        # last_idx = not 'k_grad' in ctx._kv_cache
         dq, dk, dv = torch.empty_like(q), torch.empty_like(pk), torch.empty_like(pv)
+        print(f'rankid :{dist.get_rank()},Goooooooooooooooooooooooooooooooooooo Hereeeeeeeeeeeeeeeeeee',flush=True)
         _flash_attn_varlen_backward(
             dout,
             q,
@@ -133,11 +140,9 @@ class FlashAttnVarlenFunc(torch.autograd.Function):
             ctx.dropout_p,
             ctx.softmax_scale,
             ctx.causal,
-            (-1,-1),
-            None,
-            False,
-            rng_state=rng_state,
         )
+        
+        print(f'rankid :{dist.get_rank()},DDDDDDDDDDDDDDDDDDDDDDD Hereeeeeeeeeeeeeeeeeee',flush=True)
         dq = dq[..., : dout.shape[-1]]  # We could have padded the head dimension
         dk = dk[..., : dout.shape[-1]]
         dv = dv[..., : dout.shape[-1]]
@@ -145,13 +150,23 @@ class FlashAttnVarlenFunc(torch.autograd.Function):
         dk = dk.contiguous()
         dv = dv.contiguous()
         dq = dq.contiguous()
-        if not last_idx:
+        if 'k_grad' in ctx._kv_cache:
             k_grad_p, v_grad_p = ctx._kv_cache['k_grad'], ctx._kv_cache['v_grad']
-            dk += k_grad_p
+            print(f'BBBBBBBBBBBBBefore rankid :{dist.get_rank()},GGGGGGGGGGGGGGGGGGGG:k_grad_p {k_grad_p.shape}, dk :{dk.shape}',flush=True)
+            try:
+                dk += k_grad_p
+            except:
+                print(f'EEEEEEEEEEEEEEEErankid :{dist.get_rank()},GGGGGGGGGGGGGGGGGGGG:k_grad_p {k_grad_p.shape}, dk :{dk.shape}',flush=True)
+            print(f'AAAAAAAAAAAAAfter rankid :{dist.get_rank()},GGGGGGGGGGGGGGGGGGGG:k_grad_p {k_grad_p.shape}, dk :{dk.shape}',flush=True)
             dv += v_grad_p
+        print(f'CCCCheck offset rankid :{dist.get_rank()},GGGGGGGGGGGGGGGGGGGG:ctx._offset {ctx._offset}.{dk[:, :ctx._offset].shape},seqlen:{ctx._seqlen_k}, dk :{dk.shape}',flush=True)
         ctx._kv_cache['k_grad'], ctx._kv_cache['v_grad'] = dk[:, :ctx._offset], dv[:, :ctx._offset]
         dk = dk[:, ctx._offset:ctx._seqlen_k]
         dv = dv[:, ctx._offset:ctx._seqlen_k] 
+        
+        # ctx._kv_cache['k_grad'], ctx._kv_cache['v_grad'] = dk[:, :ctx._seqlen_k], dv[:, :ctx._seqlen_k]
+        # dk = dk[:, ctx._offset:ctx._seqlen_k]
+        # dv = dv[:, ctx._offset:ctx._seqlen_k] 
             
             
         return dq, dk, dv, None, None, None, None, None, None, None

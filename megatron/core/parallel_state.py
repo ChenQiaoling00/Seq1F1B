@@ -52,6 +52,9 @@ _DATA_PARALLEL_GLOBAL_RANKS = None
 # Memory buffers to avoid dynamic memory allocation
 _GLOBAL_MEMORY_BUFFER = None
 
+_CONTEXT_PARALLEL_GROUP= None
+
+
 
 def initialize_model_parallel(
     tensor_model_parallel_size: int = 1,
@@ -140,7 +143,8 @@ def initialize_model_parallel(
     data_parallel_size: int = world_size // (
         tensor_model_parallel_size * pipeline_model_parallel_size
     )
-
+    context_parallel_size=1
+    assert data_parallel_size % context_parallel_size == 0,f'{data_parallel_size} % {context_parallel_size} != 0'
     num_tensor_model_parallel_groups: int = world_size // tensor_model_parallel_size
     num_pipeline_model_parallel_groups: int = world_size // pipeline_model_parallel_size
     num_data_parallel_groups: int = world_size // data_parallel_size
@@ -179,6 +183,15 @@ def initialize_model_parallel(
                 _DATA_PARALLEL_GROUP = group
                 _DATA_PARALLEL_GROUP_GLOO = group_gloo
                 _DATA_PARALLEL_GLOBAL_RANKS = ranks
+            for k in range(data_parallel_size//context_parallel_size):
+                ranks=range(
+                    start_rank+j+k*(context_parallel_size*tensor_model_parallel_size),
+                    start_rank+j+(k+1)*(context_parallel_size*tensor_model_parallel_size),
+                    tensor_model_parallel_size,
+                )
+                group=torch.distributed.new_group(ranks)
+                if rank in ranks:
+                    _CONTEXT_PARALLEL_GROUP=group
 
     # Apply SHARP to DP process groups
     if use_sharp:
@@ -313,6 +326,9 @@ def get_model_parallel_group():
     assert _MODEL_PARALLEL_GROUP is not None, 'model parallel group is not initialized'
     return _MODEL_PARALLEL_GROUP
 
+def get_context_parallel_group():
+    # assert _CONTEXT_PARALLEL_GROUP is not None, 'context parallel group is not initialized'
+    return _CONTEXT_PARALLEL_GROUP
 
 def get_tensor_model_parallel_group(check_initialized=True):
     """Get the tensor model parallel group the caller rank belongs to."""
@@ -367,6 +383,7 @@ def set_tensor_model_parallel_world_size(world_size):
     _MPU_TENSOR_MODEL_PARALLEL_WORLD_SIZE = world_size
 
 
+
 def set_pipeline_model_parallel_world_size(world_size):
     """Set the pipeline model parallel size"""
     global _MPU_PIPELINE_MODEL_PARALLEL_WORLD_SIZE
@@ -394,6 +411,8 @@ def get_pipeline_model_parallel_world_size():
         return _MPU_PIPELINE_MODEL_PARALLEL_WORLD_SIZE
     return torch.distributed.get_world_size(group=get_pipeline_model_parallel_group())
 
+def get_context_parallel_world_size():
+    return torch.distributed.get_world_size(group=get_context_parallel_group())
 
 def set_tensor_model_parallel_rank(rank):
     """Set tensor model parallel rank."""
@@ -420,6 +439,8 @@ def get_tensor_model_parallel_rank():
         return _MPU_TENSOR_MODEL_PARALLEL_RANK
     return torch.distributed.get_rank(group=get_tensor_model_parallel_group())
 
+def get_context_parallel_rank():
+    return torch.distributed.get_rank(group=get_context_parallel_group())
 
 def get_pipeline_model_parallel_rank():
     """Return my rank for the pipeline model parallel group."""
@@ -649,3 +670,6 @@ def destroy_model_parallel():
     _MPU_PIPELINE_MODEL_PARALLEL_RANK = None
     global _GLOBAL_MEMORY_BUFFER
     _GLOBAL_MEMORY_BUFFER = None
+    global _CONTEXT_PARALLEL_GROUP
+    _CONTEXT_PARALLEL_GROUP=None
+    

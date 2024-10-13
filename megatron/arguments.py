@@ -854,6 +854,7 @@ def _add_training_args(parser):
                        help='Disable fusing gradient accumulation to weight '
                        'gradient computation of linear layers',
                        dest='gradient_accumulation_fusion')
+    
     return parser
 
 
@@ -1061,6 +1062,12 @@ def _add_distributed_args(parser):
                        'affects the encoder embedding.)')
     group.add_argument('--use-distributed-optimizer', action='store_true',
                        help='Use distributed optimizer.')
+    
+    group.add_argument('--context-parallel-size', type=int, default=1,
+                       help='Degree of context parallel')
+    
+    group.add_argument('--kaimm-offload-activation-ratio', type=float, default=0.,
+                       help='The proportion of offloaded activations relative to total activations.')
 
     return parser
 

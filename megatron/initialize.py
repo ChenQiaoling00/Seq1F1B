@@ -301,7 +301,7 @@ def _warmup_jit_function():
     )
     input = torch.rand(
         (
-            args.seq_length,
+            args.seq_length//mpu.get_context_parallel_world_size(),
             args.micro_batch_size,
             args.ffn_hidden_size // args.tensor_model_parallel_size,
         ),
@@ -321,6 +321,7 @@ def _warmup_jit_function():
         seq_length = args.seq_length // mpu.get_tensor_model_parallel_world_size()
     else:
         seq_length = args.seq_length
+    seq_length //= mpu.get_context_parallel_world_size()
     input = torch.rand(
         (seq_length, args.micro_batch_size, args.hidden_size),
         dtype=dtype,
