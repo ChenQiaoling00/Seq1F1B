@@ -73,22 +73,14 @@ class ActivationGroup:
         # 这样的排序策略通常用于优化计算，
         # 因为处理非连续内存的张量可能需要更多的注意力（如特殊处理或优化），
         # 而大的张量处理起来计算量更大，可能希望它们在某些处理流程中后进行处理。
-        # beforelist=[i.x.shape for i in tensors]
-        # print(f'before:{beforelist}',flush=True)
-        # import pdb;pdb.set_trace()
-        
-        
         # 首先按tensor是否是非连续的来排序，非连续的tensor优先。
         # 如果两个tensor的连续性相同，则按元素数量多少来排序，元素数量多的tensor优先。
+        
         self.tensors = sorted(tensors, key=lambda t: (not t.x.is_contiguous(), -t.shape.numel()))
         self.offload_ratio = get_args().kaimm_offload_activation_ratio
         if self.offload_ratio > .5:
             self.tensors = self.tensors[::-1]  # workaround: avoid offloading half FC1 output
-            
-            
 
-        
-        
     def offload_prologue(self,key,use_bucket):
         if not self.tensors:
             return None,None,None
@@ -109,7 +101,7 @@ class ActivationGroup:
                 n=tensor.shape.numel()*tensor.dtype.itemsize
                 self.map.append((top,top+n,duplicate_flag))
                 top+=n
-        buffer=None # not use bucket
+        
         MiB=2**20
         offload_size=(int(math.ceil(top * self.offload_ratio))+MiB - 1) // MiB * MiB # 来确保任何计算结果都会向上取整到最近的 MiB 的倍数
         def cal_zero_perc(x):
@@ -147,6 +139,12 @@ class ActivationGroup:
             else:
                 return f"{total_size_bytes / (1024 ** 3):.2f} GB" 
         
+        if use_bucket:
+            buffer=get_persistent_gpu_buffer("offload",offload_size)
+        else:
+            buffer=None # not use bucket
+        
+        buffer_fake=get_persistent_gpu_buffer("offload_fake",offload_size)
         copy_tasks=[] #restore those task need to be copied async
         partially_offloaded_base=set() #restore those partially offloaded tensor's base\
         partial_tensor={}
@@ -156,10 +154,7 @@ class ActivationGroup:
    
             print_rank_0(f'origin:::::rank:{parallel_state.get_pipeline_model_parallel_rank()},key:{key},x:{tensor.x.shape},tensor memory allocated:{tensor_memory_size(tensor.x)}')
             # zero_percentage,total_elements = cal_zero_perc(tensor.x)
-     
-            
-            
-            
+    
             pp_rank_id=parallel_state.get_pipeline_model_parallel_rank()
             key_id = key
             if pp_rank_id not in partial_tensor:
@@ -173,14 +168,16 @@ class ActivationGroup:
             # partial_tensor.append((parallel_state.get_pipeline_model_parallel_rank(),key,tensor.x.shape,zero_percentage))
         
             # print_rank_0(f'zero_percentage tensor::::::rank:{parallel_state.get_pipeline_model_parallel_rank()},key:{key},zero:{zero_percentage},total_elements:{total_elements}')
-        
             
             if end_idx <= offload_size:
         
                 if not duplicate_flag:
                     if tensor.x._base is not None:
                         partially_offloaded_base.add(tensor.x._base)
-                        copy_tasks.append((begin_idx,end_idx,tensor.x))
+                        if use_bucket:
+                            buffer[begin_idx:end_idx].view(tensor.dtype).view(tensor.shape).copy_(tensor.x)
+                        else:
+                            copy_tasks.append((begin_idx,end_idx,tensor.x))
                     else:
                         print_rank_0(f'tensor x base is none, rank:{parallel_state.get_pipeline_model_parallel_rank()},key:{key},x:{tensor.x.shape}')
                 else:
@@ -192,11 +189,13 @@ class ActivationGroup:
                     if tensor.x._base is not None:
                         partially_offloaded_base.add(tensor.x._base)
                     linear_data = tensor.x.contiguous().view(-1).view(torch.uint8)
-                    copy_tasks.append((begin_idx,offload_size,linear_data[:offload_size-begin_idx]))
+                    if use_bucket:
+                        buffer[begin_idx:].view(tensor.dtype).view(tensor.shape).copy_(linear_data[:offload_size-begin_idx])
+                    else:
+                        copy_tasks.append((begin_idx,offload_size,linear_data[:offload_size-begin_idx]))
                     self.remained_not_offloaded=linear_data[offload_size-begin_idx:].clone()
                 tensor.x=None
             elif tensor.x._base in partially_offloaded_base:
-   
                 if duplicate_flag:
                     raise NotImplementedError("does not support partially offload duplicate tensors")
                 tensor.x=tensor.x.clone()
@@ -214,13 +213,16 @@ class ActivationGroup:
         #             f.write(f"{item}\n")
                     
         with torch.cuda.stream(stream):
-            for begin_idx, end_idx, x in copy_tasks:
-
-                print(f'offload::::::rank:{parallel_state.get_pipeline_model_parallel_rank()},key:{key},x:{x.shape},tensor memory allocated:{tensor_memory_size(x)}')
-                if x.is_contiguous():
-                    self.buffer_cpu[begin_idx:end_idx].view(x.dtype).view(x.shape).copy_(x, non_blocking=True)
-                else:
-                    copy2d_(self.buffer_cpu[begin_idx:end_idx].view(x.dtype).view(x.shape), x)
+            if use_bucket:
+                print(f'offload::::::rank:{parallel_state.get_pipeline_model_parallel_rank()},key:{key},offload_size:{tensor_memory_size(buffer)}')
+                self.buffer_cpu.copy_(buffer_fake,non_blocking=True)
+            else:
+                for begin_idx, end_idx, x in copy_tasks:
+                    print(f'offload::::::rank:{parallel_state.get_pipeline_model_parallel_rank()},key:{key},x:{x.shape},tensor memory allocated:{tensor_memory_size(x)}')
+                    if x.is_contiguous():
+                        self.buffer_cpu[begin_idx:end_idx].view(x.dtype).view(x.shape).copy_(x, non_blocking=True)
+                    else:
+                        copy2d_(self.buffer_cpu[begin_idx:end_idx].view(x.dtype).view(x.shape), x)
         # torch.cuda.synchronize()
 
         return stream,buffer,copy_tasks
@@ -228,7 +230,7 @@ class ActivationGroup:
     def offload_epilogue(self,stream,buffer,copy_tasks):
         if not self.tensors:
             return
-        torch.cuda.current_stream().wait_stream(stream)
+        # torch.cuda.current_stream().wait_stream(stream)
         
     def onload_prologue(self,key):
         
@@ -247,7 +249,7 @@ class ActivationGroup:
     def onload_epilogue(self,stream,buffer,key):
         if not self.tensors:
             return
-        torch.cuda.current_stream().wait_stream(stream)
+        # torch.cuda.current_stream().wait_stream(stream)
     
         recyle_cpu_buffer(self.buffer_cpu)
         self.buffer_cpu=None
@@ -313,8 +315,6 @@ class TensorPack:
         if self.tensor_wrap.base is not None:
             self.tensor_wrap.base.ref_cnt -=1
     
-
-
 groups=dict()
 
 @contextlib.contextmanager
@@ -357,12 +357,12 @@ def record(key):
 @contextlib.contextmanager    
 def offload_async(key):
     group=groups[key]
-    before_mem = torch.cuda.memory_allocated()
-    print_rank_0(f"Memory before operation: {before_mem} bytes")
+    # before_mem = torch.cuda.memory_allocated()
+    # print_rank_0(f"Memory before operation: {before_mem} bytes")
     args=group.offload_prologue(key,use_bucket=False)
-    after_mem = torch.cuda.memory_allocated()
-    print_rank_0(f"Memory after operation: {after_mem} bytes")
-    print_rank_0(f"Memory allocated by operation: {(before_mem-after_mem)/before_mem * 100} \%")
+    # after_mem = torch.cuda.memory_allocated()
+    # print_rank_0(f"Memory after operation: {after_mem} bytes")
+    # print_rank_0(f"Memory allocated by operation: {(before_mem-after_mem)/before_mem * 100} \%")
     yield
     group.offload_epilogue(*args)
  

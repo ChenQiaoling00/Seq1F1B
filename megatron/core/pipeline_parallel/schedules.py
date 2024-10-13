@@ -1071,7 +1071,10 @@ def send_forward(output_tensors, tensor_shapes, config):
     for (output_tensor, tensor_shape) in zip(output_tensors, tensor_shapes):
         if tensor_shape is None:
             continue
-        p2p_communication.send_forward(output_tensor, config)
+        reqs=p2p_communication.send_forward(output_tensor, config)
+        print(f'DDDDDDDDDDDDDDDDrank:{torch.distributed.get_rank()},reqs:{reqs}',flush=True)
+    
+    return reqs
 
 
 def send_backward(input_tensor_grads, tensor_shapes, config):
@@ -1344,19 +1347,23 @@ def forward_backward_pipelining_without_interleaving(
         with offload.record(i):
             output_tensor=forward_step(forward_step_func,data_iterator, model,num_microbatches*global_args.pipe_sp_splits,input_tensor,forward_data_store,config,collect_non_loss_data,checkpoint_activations_microbatch,)
         
-        # if num_warmup_microbatches >=2:
-        if num_warmup_microbatches >=2 and i != num_warmup_microbatches-1:
-            if i > 0:
-                offload_ctx.__exit__(None,None,None)
-            offload_ctx=offload.offload_async(i)
-            offload_ctx.__enter__()
-        
-       
-        send_forward_wrapper(output_tensor)
+        reqs=send_forward_wrapper(output_tensor)
         if not forward_only:
             input_tensors.append(input_tensor[0])
             output_tensors.append(output_tensor[0])
             deallocate_output_tensor(output_tensor[0], config.deallocate_pipeline_outputs)
+        
+        # if num_warmup_microbatches >=2:
+        if num_warmup_microbatches >=2 and i != num_warmup_microbatches-1:
+            if not core.parallel_state.is_pipeline_last_stage():
+                print(f'cccccccccccccccccccccc:rank:{torch.distributed.get_rank()},reqs:{reqs}',flush=True)
+                for req in reqs:
+                    req.wait()
+            if i > 0:
+                offload_ctx.__exit__(None,None,None)
+            offload_ctx=offload.offload_async(i)
+            offload_ctx.__enter__()
+
 
     # if num_warmup_microbatches >=2:
     #     # onload_ctx=offload.onload_async(0)
@@ -1505,12 +1512,7 @@ def forward_backward_pipelining_without_interleaving(
                     onload_ctx.__enter__()
                 onload_ctx.__exit__(None,None,None)
                     
-            
-
-            
-
-    
-
+        
     # Launch any remaining grad reductions
     if no_sync_context is not None:
         enable_grad_sync()
