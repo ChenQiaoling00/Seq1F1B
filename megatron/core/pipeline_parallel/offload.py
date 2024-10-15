@@ -242,7 +242,6 @@ class ActivationGroup:
         buffer = get_persistent_gpu_buffer(buffer_key,self.buffer_cpu.numel())
         stream.wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(stream):
-            
             buffer.copy_(self.buffer_cpu,non_blocking=True)
         return stream,buffer,key
         
@@ -359,7 +358,7 @@ def offload_async(key):
     group=groups[key]
     # before_mem = torch.cuda.memory_allocated()
     # print_rank_0(f"Memory before operation: {before_mem} bytes")
-    args=group.offload_prologue(key,use_bucket=False)
+    args=group.offload_prologue(key,use_bucket=True)
     # after_mem = torch.cuda.memory_allocated()
     # print_rank_0(f"Memory after operation: {after_mem} bytes")
     # print_rank_0(f"Memory allocated by operation: {(before_mem-after_mem)/before_mem * 100} \%")

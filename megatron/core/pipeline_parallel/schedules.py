@@ -1072,7 +1072,6 @@ def send_forward(output_tensors, tensor_shapes, config):
         if tensor_shape is None:
             continue
         reqs=p2p_communication.send_forward(output_tensor, config)
-        print(f'DDDDDDDDDDDDDDDDrank:{torch.distributed.get_rank()},reqs:{reqs}',flush=True)
     
     return reqs
 
@@ -1487,6 +1486,8 @@ def forward_backward_pipelining_without_interleaving(
                 if config.grad_sync_func is None or rank == 0:
                     enable_grad_sync()
                     
+            
+                    
             input_tensor = input_tensors.pop(0)
             output_tensor = output_tensors.pop(0)
     
@@ -1494,8 +1495,14 @@ def forward_backward_pipelining_without_interleaving(
             # i = [0,1,2]
             # [2,1,0]
             # num_microbatches_remaining = 0
-            
             onload_id=num_warmup_microbatches -i-2
+            if num_warmup_microbatches >=2:
+                if i+1 < num_warmup_microbatches:
+                    # onload_ctx = offload.onload_async(backward_id+1)
+                    onload_ctx = offload.onload_async(onload_id)
+                    onload_ctx.__enter__()
+                onload_ctx.__exit__(None,None,None)
+            
             
             print(f'OOOOOONNNNNNNLLLLLLLLLOOOOADrank:{parallel_state.get_pipeline_model_parallel_rank()},onload_id:onload_id:onload_id:{onload_id}',flush=True)
             
@@ -1505,12 +1512,7 @@ def forward_backward_pipelining_without_interleaving(
             send_backward_wrapper(input_tensor_grad)
             
             backward_id = i + num_microbatches_remaining
-            if num_warmup_microbatches >=2:
-                if i+1 < num_warmup_microbatches:
-                    # onload_ctx = offload.onload_async(backward_id+1)
-                    onload_ctx = offload.onload_async(onload_id)
-                    onload_ctx.__enter__()
-                onload_ctx.__exit__(None,None,None)
+
                     
         
     # Launch any remaining grad reductions
