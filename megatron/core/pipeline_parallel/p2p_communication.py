@@ -158,6 +158,7 @@ def _batched_p2p_ops(
             group,
         )
         ops.append(recv_next_op)
+    
     if len(ops) > 0:
         reqs = torch.distributed.batch_isend_irecv(ops)
     else:
@@ -340,15 +341,18 @@ def _communicate(
         group=get_pipeline_model_parallel_group(),
     )
 
-    if wait_on_reqs and len(reqs) > 0:
-        for req in reqs:
-            req.wait()
-        reqs = None
+
+    # if wait_on_reqs and len(reqs) > 0:
+    #     for req in reqs:
+    #         req.wait()
+    #     reqs = None
 
     if config.batch_p2p_comm and config.batch_p2p_sync:
         # To protect against race condition when using batch_isend_irecv().
         # User should assert that we have a modern enough PyTorch to not need this
         torch.cuda.synchronize()
+        
+    print(f'SEEEEEEEEEEEEEEEEE REturn:rank:{torch.distributed.get_rank()},reqs :{reqs}',flush=True)
 
     return tensor_recv_prev, tensor_recv_next, reqs
 
@@ -406,11 +410,12 @@ def send_forward(output_tensor: torch.Tensor, config: ModelParallelConfig) -> No
 
     See _communicate for argument details.
     """
-
+    reqs=None
     if not core.parallel_state.is_pipeline_last_stage():
         if config.timers is not None:
             config.timers('forward-send', log_level=2).start()
-        _communicate(
+        
+        _,_,reqs=_communicate(
             tensor_send_next=output_tensor,
             tensor_send_prev=None,
             recv_prev=False,
@@ -418,8 +423,10 @@ def send_forward(output_tensor: torch.Tensor, config: ModelParallelConfig) -> No
             tensor_shape=None,
             config=config,
         )
+
         if config.timers is not None:
             config.timers('forward-send').stop()
+    return reqs
 
 
 def send_backward(input_tensor_grad: torch.Tensor, config: ModelParallelConfig) -> None:
