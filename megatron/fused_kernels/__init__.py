@@ -52,6 +52,15 @@ def load(args):
             + cc_flag,
             verbose=(args.rank == 0),
         )
+        
+    if args.kaimm_offload_activation_ratio > 0:
+        extra_cuda_flags=[]
+        sources=[srcpath / 'wrap_gemm.cpp',
+                 srcpath / 'wrap_gemm_cuda.cu']
+        warp_gemm = _cpp_extention_load_helper(
+            'wrap_gemm_cuda',sources,extra_cuda_flags
+        )
+        
 
 
 def _get_cuda_bare_metal_version(cuda_dir):
